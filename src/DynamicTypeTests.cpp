@@ -1,0 +1,5 @@
+#include "DynamicTypeTests.h"
+
+IMPLEMENT_DYNAMIC_TYPE_SEQUENTIAL( FMoveComponentParams )
+IMPLEMENT_DYNAMIC_TYPE_SEQUENTIAL( FNestedDynamicType )
+IMPLEMENT_DYNAMIC_TYPE_SEQUENTIAL( FInheritedDynamicType )
