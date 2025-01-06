@@ -8,22 +8,21 @@
 template<typename T>
 class TMemberTypeDescriptor : public IMemberTypeDescriptor {
 protected:
-    std::wstring TypeNameReference;
+    dtl_string TypeNameReference;
 public:
-    explicit TMemberTypeDescriptor( std::wstring InTypeName ) : TypeNameReference(std::move(InTypeName)) {}
+    explicit TMemberTypeDescriptor( dtl_string InTypeName ) : TypeNameReference(std::move(InTypeName)) {}
 
-    const T* GetValuePtr( const void* data ) const { return static_cast<const T*>( data ); };
-    T* GetValuePtr( void* data ) const { return static_cast<T*>( data ); };
+    static const T* GetValuePtr(const void* Data) { return static_cast<const T*>(Data); }
+    static T* GetValuePtr(void* Data) { return static_cast<T*>(Data); }
 
-    std::wstring GetTypeName() const override { return TypeNameReference; }
-    int32_t GetMemberSize() const override { return sizeof(T); }
-    int32_t GetMemberAlignment() const override { return alignof(T); }
-    void InitializeValue(void* data) const override { new (data) T(); }
-    void DestroyValue(void* data) const override { GetValuePtr(data)->~T(); }
-    void CopyValue(void* dest, const void* src) const override { *GetValuePtr(dest) = *GetValuePtr(src); }
-    void ClearValue(void* data) const override { *GetValuePtr(data) = T(); }
+    [[nodiscard]] dtl_string GetTypeName() const override { return TypeNameReference; }
+    [[nodiscard]] size_t GetMemberSize() const override { return sizeof(T); }
+    [[nodiscard]] size_t GetMemberAlignment() const override { return alignof(T); }
+    void EmplaceValue(void* PlacementStorage) const override { new (PlacementStorage) T(); }
+    void DestructValue(void* Data) const override { GetValuePtr(Data)->~T(); }
+    void CopyAssignValue(void* Dest, const void* Src) const override { *GetValuePtr(Dest) = *GetValuePtr(Src); }
 
-    static TMemberTypeDescriptor* StaticDescriptor( const wchar_t* TypeName )
+    static TMemberTypeDescriptor* StaticDescriptor(const DTL_CHAR* TypeName)
     {
         static TMemberTypeDescriptor StaticDescriptor{ TypeName };
         return &StaticDescriptor;
@@ -31,94 +30,47 @@ public:
 };
 
 /** Member type descriptor for the dynamic type */
-class DTL_API FDynamicTypeDescriptor : public IMemberTypeDescriptor
+class FDynamicMemberTypeDescriptor : public IMemberTypeDescriptor
 {
 protected:
-    IDynamicTypeInterface* DynamicType{};
+    IDynamicTypeLayout* DynamicType{};
 public:
-    explicit FDynamicTypeDescriptor( IDynamicTypeInterface* InDynamicType );
+    explicit FDynamicMemberTypeDescriptor(IDynamicTypeLayout* InDynamicType) : DynamicType(InDynamicType) {}
 
-    std::wstring GetTypeName() const override;
-    int32_t GetMemberSize() const override;
-    int32_t GetMemberAlignment() const override;
-    void InitializeValue(void* data) const override;
-    void DestroyValue(void* data) const override;
-    void CopyValue(void* dest, const void* src) const override;
-    void ClearValue(void* data) const override;
-    IDynamicTypeInterface * GetDynamicType() const override;
-
-    static FDynamicTypeDescriptor* FindOrCreateTypeDescriptor( IDynamicTypeInterface* InDynamicType );
+    [[nodiscard]] dtl_string GetTypeName() const override { return DynamicType->GetTypeName(); }
+    [[nodiscard]] size_t GetMemberSize() const override { return DynamicType->GetSize(); }
+    [[nodiscard]] size_t GetMemberAlignment() const override { return DynamicType->GetMinAlignment(); }
+    void EmplaceValue(void* PlacementStorage) const override { DynamicType->EmplaceTypeInstance(PlacementStorage); }
+    void DestructValue(void* Data) const override { DynamicType->DestructTypeInstance(Data); }
+    void CopyAssignValue(void* Dest, const void* Src) const override { DynamicType->CopyAssignTypeInstance(Dest, Src); }
+    [[nodiscard]] IDynamicTypeLayout* GetDynamicType() const override { return DynamicType; }
 };
 
-class ExternalDynamicTypeInternal;
-
-/** Empty type is a type with no members */
-class DTL_API EmptyDynamicType : public IDynamicTypeInterface
-{
+/**
+ * Automatic type layout that will lay out members in the order of declaration.
+ * Supports virtual table management. If there are virtual functions, they will be bound to this type's vtable.
+ * Virtual function implementations can be registered RegisterVirtualFunctionOverride. By default, all virtual functions are pure and calling them will result in a pure handler being called.
+ */
+class DTL_API AutoTypeLayout : public IDynamicTypeLayout {
 protected:
-    std::wstring TypeName;
+    size_t CalculatedSize{0};
+    size_t CalculatedAlignment{1};
+    int64_t VirtualFunctionTableDisplacement{-1};
+    std::vector<GenericFunctionPtr> VirtualFunctionTable;
 public:
-    explicit EmptyDynamicType( std::wstring InTypeName ) : TypeName(std::move( InTypeName )) {}
+    AutoTypeLayout(const dtl_string& InTypeName, IDynamicTypeLayout* InParentType, const std::vector<FDynamicTypeMember*>& InTypeMembers, const std::vector<FDynamicTypeVirtualFunction*>& InVirtualFunctions);
 
-    void RegisterTypeMember( IDynamicTypeMember* InTypeMember ) override;
-    void GetAllTypeMembers(std::vector<IDynamicTypeMember *> &OutTypeMembers) const override {}
-    IDynamicTypeMember * FindTypeMember(const std::wstring &MemberName) const override { return nullptr; }
-    bool InitializeTypeInstance(void* Instance, int32_t InternalFlags) const override { return true; }
-    void DestroyTypeInstance(void* Instance, int32_t InternalFlags) const override {}
-    void CopyTypeInstance(void* DestInstance, const void* SrcInstance, int32_t InternalFlags) const override {}
-    void GetLayoutDependencies(std::vector<IDynamicTypeInterface*>& LayoutDependencies) const override {}
-    bool IsLayoutComputed() const override { return true; }
-    bool RecomputeLayout(bool bForce) override { return true; }
-    int32_t GetSize() const override { return 0; }
-    int32_t GetMinAlignment() const override { return 0; }
+    /** Allows overriding the default implementation of the provided virtual function */
+    void RegisterVirtualFunctionOverride(const FDynamicTypeVirtualFunction* InVirtualFunction, GenericFunctionPtr NewFunctionPointer);
+
+    static uintptr_t StaticTypeIdToken();
+    [[nodiscard]] uintptr_t GetTypeIdToken() const override { return StaticTypeIdToken(); }
+    void InitializeDynamicType() override;
+    void EmplaceTypeInstance(void* Instance) const override;
+    void DestructTypeInstance(void* Instance) const override;
+    void CopyAssignTypeInstance(void* DestInstance, const void* SrcInstance) const override;
+    [[nodiscard]] size_t GetSize() const override { return CalculatedSize; }
+    [[nodiscard]] size_t GetMinAlignment() const override { return CalculatedAlignment; }
+private:
+    static void PureVirtualFunctionCalled();
 };
-
-/** External dynamic type is a dynamic type which member offsets are sources externally, and also initialized and copied externally. */
-class DTL_API FExternalLayoutDynamicType : public IDynamicTypeInterface {
-protected:
-    std::unique_ptr<ExternalDynamicTypeInternal> InternalState{};
-public:
-    FExternalLayoutDynamicType( const std::wstring& InTypeName );
-
-    void SetupExternalType( int32_t InTypeSize, int32_t InAlignment );
-    void AddExternalMemberOffset( IDynamicTypeMember* Member, int32_t InPredefinedMemberOffset );
-
-    void RegisterTypeMember( IDynamicTypeMember* InTypeMember ) override;
-    void GetAllTypeMembers(std::vector<IDynamicTypeMember *> &OutTypeMembers) const override;
-    IDynamicTypeMember * FindTypeMember(const std::wstring &MemberName) const override;
-    bool InitializeTypeInstance(void* Instance, int32_t InternalFlags) const override;
-    void DestroyTypeInstance(void* Instance, int32_t InternalFlags) const override;
-    void CopyTypeInstance(void* DestInstance, const void* SrcInstance, int32_t InternalFlags) const override;
-    void GetLayoutDependencies(std::vector<IDynamicTypeInterface*>& LayoutDependencies) const override;
-    bool IsLayoutComputed() const override;
-    bool RecomputeLayout(bool bForce) override;
-    int32_t GetSize() const override;
-    int32_t GetMinAlignment() const override;
-};
-
-class CustomDynamicTypeInternal;
-
-/** Sequential dynamic type is a dynamic type which properties are defined locally and their offsets should be computed and members initialized */
-class DTL_API FSequentialLayoutDynamicType : public IDynamicTypeInterface {
-protected:
-    std::unique_ptr<CustomDynamicTypeInternal> InternalState{};
-public:
-    FSequentialLayoutDynamicType( const std::wstring& InTypeName );
-
-    void RegisterTypeMember( IDynamicTypeMember* InTypeMember ) override;
-    void GetAllTypeMembers(std::vector<IDynamicTypeMember *> &OutTypeMembers) const override;
-    IDynamicTypeMember * FindTypeMember(const std::wstring &MemberName) const override;
-    bool InitializeTypeInstance(void* Instance, int32_t InternalFlags) const override;
-    void DestroyTypeInstance(void* Instance, int32_t InternalFlags) const override;
-    void CopyTypeInstance(void* DestInstance, const void* SrcInstance, int32_t InternalFlags) const override;
-    void GetLayoutDependencies(std::vector<IDynamicTypeInterface*>& LayoutDependencies) const override;
-    bool IsLayoutComputed() const override;
-    bool RecomputeLayout(bool bForce) override;
-    int32_t GetSize() const override;
-    int32_t GetMinAlignment() const override;
-};
-
-using CollectTypeMembersFunc = void(*)(std::vector<IDynamicTypeMember*>&);
-
-DTL_API IDynamicTypeInterface* GetPrivateStaticTypeFSequentialLayoutDynamicType( IDynamicTypeInterface** OutDynamicType, const wchar_t* InTypeName, IDynamicTypeInterface* InParentType, CollectTypeMembersFunc InCollectDynamicMembers, uint32_t ExtraFlags = 0 );
-DTL_API IDynamicTypeInterface* GetPrivateStaticTypeFExternalLayoutDynamicType( IDynamicTypeInterface** OutDynamicType, const wchar_t* InTypeName, IDynamicTypeInterface* InParentType, CollectTypeMembersFunc InCollectDynamicMembers, uint32_t ExtraFlags = 0 );

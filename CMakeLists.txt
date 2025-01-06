@@ -5,5 +5,5 @@ set(CMAKE_CXX_STANDARD 23)
 
 file(GLOB_RECURSE SOURCES src/**.cpp)
 
-include_directories(include)
-add_library(DynamicTypeLib ${SOURCES})
+add_library(DynamicTypeLib STATIC ${SOURCES})
+target_include_directories(DynamicTypeLib PUBLIC include)
